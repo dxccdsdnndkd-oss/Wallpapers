@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -24,48 +24,80 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Extract project ZIP
+      - name: Extract nested project ZIP files
         shell: bash
         run: |
+          set -e
           mkdir -p src
 
           ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' -print -quit)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP fayl topilmadi"
+            echo "ERROR: Repository ildizida ZIP topilmadi."
             exit 1
           fi
 
-          echo "ZIP: $ZIP_FILE"
+          echo "Tashqi ZIP: $ZIP_FILE"
           unzip -q -o "$ZIP_FILE" -d src
 
-          echo "ZIP ichidagi Gradle fayllari:"
+          for round in 1 2 3 4; do
+            FOUND=0
+
+            while IFS= read -r -d '' ZIP; do
+              FOUND=1
+              DEST="$(dirname "$ZIP")/extracted"
+              mkdir -p "$DEST"
+
+              echo "Ichki ZIP ochilmoqda: $ZIP"
+              unzip -q -o "$ZIP" -d "$DEST"
+              rm -f "$ZIP"
+            done < <(find src -type f -iname '*.zip' -print0)
+
+            if [ "$FOUND" -eq 0 ]; then
+              break
+            fi
+          done
+
+          echo "ZIP ochish tugadi."
           find src -type f -name gradlew -print
 
-      - name: Find Android project
+      - name: Locate Android project
+        id: locate
         shell: bash
         run: |
+          set -e
+
           GRADLEW="$(find src -type f -name gradlew -print -quit)"
 
           if [ -z "$GRADLEW" ]; then
-            echo "ERROR: ZIP ichidan gradlew topilmadi"
-            echo "ZIP ichidagi fayllar:"
+            echo "ERROR: ZIP ichidan gradlew topilmadi."
+            echo "Top-level fayllar:"
             find src -maxdepth 5 -type f | head -200
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$GRADLEW")"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Loyiha topildi: $PROJECT_DIR"
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "ERROR: settings.gradle yoki settings.gradle.kts topilmadi."
+            echo "Topilgan gradlew: $GRADLEW"
+            exit 1
+          fi
+
+          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Android loyiha topildi: $PROJECT_DIR"
 
       - name: Build debug APK
         id: build
         continue-on-error: true
         shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.locate.outputs.dir }}
         run: |
           cd "$PROJECT_DIR"
           chmod +x gradlew
+
           set -o pipefail
           ./gradlew assembleDebug --no-daemon --stacktrace \
             2>&1 | tee "$GITHUB_WORKSPACE/build.log"
@@ -78,15 +110,15 @@ jobs:
           path: build.log
           if-no-files-found: warn
 
-      - name: Upload APK
+      - name: Upload debug APK
         if: steps.build.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: neonwall-apk
-          path: src/**/build/outputs/apk/debug/*.apk
+          path: |
+            src/**/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
       - name: Fail if build failed
         if: steps.build.outcome != 'success'
         run: exit 1
-        
