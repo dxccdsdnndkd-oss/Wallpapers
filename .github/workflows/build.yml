@@ -6,7 +6,7 @@ branches: [main]
 workflow_dispatch:
 
 permissions:
-contents: write
+contents: read
 
 jobs:
 build:
@@ -18,29 +18,23 @@ steps:
   - uses: actions/setup-java@v4
     with:
       distribution: temurin
-      java-version: 17
+      java-version: '17'
 
-  - name: Unzip project
+  - name: Find Android project
     run: |
-      mkdir -p src
-      ZIP_FILE="$(find . -maxdepth 1 -name '*.zip' -print -quit)"
-      if [ -z "$ZIP_FILE" ]; then
-        echo "ERROR: Repository rootida ZIP topilmadi."
+      GRADLEW="$(find . -type f -name gradlew \
+        -not -path './.git/*' -print -quit)"
+
+      if [ -z "$GRADLEW" ]; then
+        echo "ERROR: gradlew topilmadi."
+        echo "Repo ichidagi Android loyiha fayllarini tekshiring."
+        find . -maxdepth 4 -type f | head -200
         exit 1
       fi
-      unzip -q -o "$ZIP_FILE" -d src
-      find src -maxdepth 3 -name gradlew -print
 
-  - name: Locate project
-    run: |
-      if [ -f src/fixed/gradlew ]; then
-        echo "PROJECT_DIR=src/fixed" >> "$GITHUB_ENV"
-      elif [ -f src/gradlew ]; then
-        echo "PROJECT_DIR=src" >> "$GITHUB_ENV"
-      else
-        echo "ERROR: gradlew topilmadi. ZIP papka tuzilishini tekshiring."
-        exit 1
-      fi
+      PROJECT_DIR="$(dirname "$GRADLEW")"
+      echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      echo "Android loyiha: $PROJECT_DIR"
 
   - name: Build debug APK
     id: build
@@ -49,7 +43,8 @@ steps:
       cd "$PROJECT_DIR"
       chmod +x gradlew
       set -o pipefail
-      ./gradlew assembleDebug --stacktrace --no-daemon 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+      ./gradlew assembleDebug --stacktrace --no-daemon \
+        2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
   - name: Upload build log
     if: always()
@@ -67,6 +62,6 @@ steps:
       path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
       if-no-files-found: error
 
-  - name: Fail workflow if build failed
+  - name: Report build failure
     if: steps.build.outcome != 'success'
     run: exit 1
